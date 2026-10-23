@@ -79,19 +79,43 @@ const uint16_t* sbcHighTable(const void* profile) {
     return nullptr;
 }
 
-uint32_t sbcToUnicode(const uint8_t* profile, uint8_t sbc) {
-    if (const uint16_t* high = sbcHighTable(profile)) return sbc >= 0x80 ? high[sbc - 0x80] : sbc;
-    return sbc >= 0x80 && sbc < 0xA0 ? CP1252_HIGH[sbc - 0x80] : sbc;
+const SingleByte::LowByte* sbcLowBySbc(const void* profile, uint32_t sbc) {
+    for (const SingleByte::LowByte& low : SingleByte::LOW) {
+        if (profile == singleByteProfile(low.table) && low.sbc == sbc) return &low;
+    }
+    return nullptr;
+}
+
+const SingleByte::LowByte* sbcLowByCode(const void* profile, uint32_t code) {
+    for (const SingleByte::LowByte& low : SingleByte::LOW) {
+        if (profile == singleByteProfile(low.table) && low.code == code) return &low;
+    }
+    return nullptr;
+}
+
+bool sbcToUnicode(const uint8_t* profile, uint8_t sbc, uint32_t& code) {
+    if (const SingleByte::LowByte* low = sbcLowBySbc(profile, sbc)) {
+        code = low->code;
+        return true;
+    }
+    if (const uint16_t* high = sbcHighTable(profile)) code = sbc >= 0x80 ? high[sbc - 0x80] : sbc;
+    else code = sbc >= 0x80 && sbc < 0xA0 ? CP1252_HIGH[sbc - 0x80] : sbc;
+    return code != SingleByte::Unassigned;
 }
 
 bool unicodeToSbc(const uint8_t* profile, uint32_t code, uint8_t& sbc) {
     if (const uint16_t* high = sbcHighTable(profile)) {
+        if (const SingleByte::LowByte* low = sbcLowByCode(profile, code)) {
+            sbc = low->sbc;
+            return true;
+        }
         if (code < 0x80) {
+            if (sbcLowBySbc(profile, code)) return false;
             sbc = static_cast<uint8_t>(code);
             return true;
         }
         for (uint32_t i = 0; i < 128; ++i) {
-            if (high[i] == code) {
+            if (high[i] != SingleByte::Unassigned && high[i] == code) {
                 sbc = static_cast<uint8_t>(0x80 + i);
                 return true;
             }
@@ -577,8 +601,7 @@ int decodeMbcs(const void* profile, const uint8_t* mbcs, uint32_t mbcsMax, uint3
     const uint8_t lead = mbcs[0];
     if (isSbc(profile)) {
         length = 1;
-        code = sbcToUnicode(static_cast<const uint8_t*>(profile), lead);
-        return 0;
+        return sbcToUnicode(static_cast<const uint8_t*>(profile), lead, code) ? 0 : CES_ERROR_UNASSIGNED_CODE;
     }
     if (isSjis(profile)) {
         const bool strict = isSjisX0208(profile);
@@ -987,8 +1010,7 @@ uint32_t encodeUtf32(uint32_t code, uint32_t* utf32) {
 int sbcToUnit(const uint8_t* profile, uint8_t sbc, const void* target, uint32_t& code) {
     if (!isSbc(profile)) return CES_ERROR_INVALID_PARAMETER;
     if (!target) return CES_ERROR_INVALID_DST_BUFFER;
-    code = sbcToUnicode(profile, sbc);
-    return 0;
+    return sbcToUnicode(profile, sbc, code) ? 0 : CES_ERROR_UNASSIGNED_CODE;
 }
 
 template<bool BigEndian>
@@ -1161,6 +1183,10 @@ const uint8_t* APS5_VABI sceCesRefersUcsProfileCp1258(void) {
     return singleByteProfile(SingleByte::Cp1258);
 }
 
+const uint8_t* APS5_VABI sceCesRefersUcsProfileCp864(void) {
+    return singleByteProfile(SingleByte::Cp864);
+}
+
 void* APS5_VABI sceCesUcsProfileInitSJis1997Cp932(void* sheet) {
     if (!sheet) return nullptr;
     std::memcpy(sheet, SJIS_TAG, sizeof(SJIS_TAG));
@@ -1281,8 +1307,10 @@ int APS5_VABI sceCesSbcToUtf8(const uint8_t* profile, uint8_t sbc, uint8_t* utf8
     if (!isSbc(profile)) return CES_ERROR_INVALID_PARAMETER;
     if (!utf8) return CES_ERROR_INVALID_DST_BUFFER;
 
+    uint32_t code = 0;
+    if (!sbcToUnicode(profile, sbc, code)) return CES_ERROR_UNASSIGNED_CODE;
     uint8_t encoded[4];
-    const uint32_t length = encodeUtf8(sbcToUnicode(profile, sbc), encoded);
+    const uint32_t length = encodeUtf8(code, encoded);
     if (utf8max < length) return CES_ERROR_DST_BUFFER_END;
     for (uint32_t i = 0; i < length; ++i) utf8[i] = encoded[i];
     if (utf8_len) *utf8_len = length;
