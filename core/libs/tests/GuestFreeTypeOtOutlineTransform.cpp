@@ -74,10 +74,51 @@ void Transform() {
     Require(Throws([&] { FT_Outline_Transform_nid_postfix(&small.outline, &shear); }), "null points with a positive count throw");
 }
 
+void Embolden() {
+    Shape trueType({{0, 0}, {0, 640}, {640, 640}, {640, 0}}, {3});
+    Require(FT_Outline_Embolden_nid_postfix(&trueType.outline, 65) == 0, "a TrueType contour emboldens");
+    Require(trueType.Is({{0, 0}, {0, 704}, {704, 704}, {704, 0}}), "the strength is halved and the box grows up and right");
+
+    Shape postScript({{0, 0}, {640, 0}, {640, 640}, {0, 640}}, {3});
+    Require(FT_Outline_Embolden_nid_postfix(&postScript.outline, 64) == 0, "a PostScript contour emboldens");
+    Require(postScript.Is({{0, 0}, {704, 0}, {704, 704}, {0, 704}}), "a PostScript contour shifts along the other normal");
+
+    Shape xy({{0, 0}, {0, 640}, {640, 640}, {640, 0}}, {3});
+    Require(FT_Outline_EmboldenXY_nid_postfix(&xy.outline, 128, -32) == 0, "FT_Outline_EmboldenXY takes separate strengths");
+    Require(xy.Is({{0, 0}, {0, 608}, {768, 608}, {768, 0}}), "a negative strength thins that axis");
+
+    Shape nested({{0, 0}, {0, 640}, {640, 640}, {640, 0}, {128, 128}, {512, 128}, {512, 512}, {128, 512}}, {3, 7});
+    Require(FT_Outline_Embolden_nid_postfix(&nested.outline, 40) == 0, "nested contours embolden");
+    Require(nested.Is({{0, 0}, {0, 680}, {680, 680}, {680, 0}, {168, 168}, {512, 168}, {512, 512}, {168, 512}}), "the inner contour shrinks");
+
+    Shape triangle({{0, 0}, {320, 1280}, {640, 0}}, {2});
+    Require(FT_Outline_Embolden_nid_postfix(&triangle.outline, 96) == 0, "a sharp corner emboldens");
+    Require(triangle.Is({{-14, 0}, {368, 1527}, {750, 0}}), "corner shifts follow the 2.4.11 bisector");
+
+    Shape flat({{0, 0}, {100, 0}, {200, 0}}, {2});
+    Require(FT_Outline_Embolden_nid_postfix(&flat.outline, 128) == 0x06 && flat.Is({{0, 0}, {100, 0}, {200, 0}}),
+            "a zero-area contour is Invalid_Argument");
+    flat.outline.n_contours = 0;
+    Require(FT_Outline_Embolden_nid_postfix(&flat.outline, 128) == 0, "an outline without contours succeeds");
+    Require(FT_Outline_Embolden_nid_postfix(nullptr, 128) == 0x06, "a null outline is Invalid_Argument");
+
+    Shape weak({{0, 0}, {0, 640}, {640, 640}, {640, 0}}, {3});
+    weak.outline.points = nullptr;
+    Require(FT_Outline_EmboldenXY_nid_postfix(&weak.outline, 1, -1) == 0, "strengths that halve to zero return before reading the outline");
+
+    Shape outside({{0, 0}, {0, 640}, {640, 640}, {640, 0}}, {4});
+    Require(Throws([&] { FT_Outline_Embolden_nid_postfix(&outside.outline, 128); }) && outside.Is({{0, 0}, {0, 640}, {640, 640}, {640, 0}}),
+            "a contour end past the points throws unchanged");
+    Shape huge({{0, 0}, {0, 0x40000000}, {0x40000000, 0x40000000}, {0x40000000, 0}}, {3});
+    Require(Throws([&] { FT_Outline_Embolden_nid_postfix(&huge.outline, 128); }) && huge.Is({{0, 0}, {0, 0x40000000}, {0x40000000, 0x40000000}, {0x40000000, 0}}),
+            "overflowing products throw unchanged");
+}
+
 }
 
 int main() {
     Transform();
+    Embolden();
     std::puts("Guest FreeType Ot outline transform tests passed");
     return 0;
 }
